@@ -1,46 +1,126 @@
 # app/presentation/controllers/social_media_controller.py
-from typing import List
+import logging
+from typing import List, Dict, Any
 from app.domain.entities.post import Post
 from app.domain.entities.comment import Comment
-from app.application.use_cases.posts import FetchAndStorePostsUseCase
-from app.application.use_cases.comments import FetchAndStoreCommentsUseCase
-from app.application.use_cases.processing import ProcessPostUseCase, ProcessCommentUseCase
+from app.domain.interfaces.repositories import IPostRepository, ICommentRepository
+from app.domain.interfaces.services import IPokeAPIService, IProcessingService
+from app.presentation.error_handling.error_handler import ErrorHandler
+
+logger = logging.getLogger(__name__)
 
 class SocialMediaController:
+    """
+    Main controller for social media operations that:
+    - Orchestrates the data pipeline
+    - Coordinates between services and repositories
+    - Handles errors at the presentation layer
+    """
+
     def __init__(
         self,
-        fetch_posts_use_case: FetchAndStorePostsUseCase,
-        fetch_comments_use_case: FetchAndStoreCommentsUseCase,
-        process_post_use_case: ProcessPostUseCase,
-        process_comment_use_case: ProcessCommentUseCase
+        post_repository: IPostRepository,
+        comment_repository: ICommentRepository,
+        pokeapi_service: IPokeAPIService,
+        processing_service: IProcessingService
     ):
-        self.fetch_posts_use_case = fetch_posts_use_case
-        self.fetch_comments_use_case = fetch_comments_use_case
-        self.process_post_use_case = process_post_use_case
-        self.process_comment_use_case = process_comment_use_case
+        self.post_repository = post_repository
+        self.comment_repository = comment_repository
+        self.pokeapi_service = pokeapi_service
+        self.processing_service = processing_service
 
-    def run_data_pipeline(self) -> None:
-        print("Starting data pipeline...")
+    def execute_pipeline(self) -> Dict[str, Any]:
+        """
+        Execute the complete data processing pipeline with error handling
         
-        # Step 1: Fetch and store posts
-        posts = self.fetch_posts_use_case.execute()
-        print(f"Fetched and stored {len(posts)} posts")
+        Returns:
+            Dictionary containing either:
+            - Success response with statistics, or
+            - Error response if pipeline fails
+        """
+        @ErrorHandler.wrap_endpoint
+        def _execute():
+            return self._execute_pipeline_internal()
+            
+        return _execute()
+
+    def _execute_pipeline_internal(self) -> Dict[str, Any]:
+        """
+        Internal implementation of the pipeline execution
+        """
+        logger.info("Starting social media data pipeline")
         
-        # Step 2: Process posts and fetch/store comments
+        posts = self._fetch_and_store_posts()
+        stats = {
+            'posts_processed': 0,
+            'comments_processed': 0,
+            'post_errors': [],
+            'comment_errors': []
+        }
+        
         for post in posts:
-            # Process the post
-            processed_data = self.process_post_use_case.execute(post.to_dict())
-            if processed_data:
-                print(f"Processed post: {post.id}")
+            post_result = self._process_post(post)
+            if post_result['status'] == 'processed':
+                stats['posts_processed'] += 1
+            else:
+                stats['post_errors'].append(post_result)
             
-            # Fetch and store comments for this post
-            comments = self.fetch_comments_use_case.execute(post)
-            print(f"Fetched and stored {len(comments)} comments for post {post.id}")
-            
-            # Process each comment
+            comments = self._fetch_and_store_comments(post)
             for comment in comments:
-                processed_data = self.process_comment_use_case.execute(comment.to_dict())
-                if processed_data:
-                    print(f"Processed comment: {comment.id}")
+                comment_result = self._process_comment(comment)
+                if comment_result['status'] == 'processed':
+                    stats['comments_processed'] += 1
+                else:
+                    stats['comment_errors'].append(comment_result)
         
-        print("Data pipeline completed successfully.")
+        logger.info("Pipeline execution completed")
+        return {
+            'status': 'completed',
+            'stats': stats
+        }
+
+    def _fetch_and_store_posts(self) -> List[Post]:
+        """Fetch posts from PokeAPI and store in repository"""
+        logger.debug("Fetching posts from PokeAPI")
+        posts = self.pokeapi_service.fetch_and_transform_posts()
+        saved_posts = []
+        
+        for post in posts:
+            if self.post_repository.save(post):
+                saved_posts.append(post)
+                logger.debug(f"Saved post: {post.id}")
+        
+        logger.info(f"Saved {len(saved_posts)} posts")
+        return saved_posts
+
+    def _process_post(self, post: Post) -> Dict[str, Any]:
+        """Process post data through the processing service"""
+        logger.debug(f"Processing post {post.id}")
+        result = self.processing_service.process_post(post.to_dict())
+        if result:
+            logger.debug(f"Successfully processed post {post.id}")
+            return {'post_id': post.id, 'status': 'processed'}
+        return {'post_id': post.id, 'status': 'failed'}
+
+    def _fetch_and_store_comments(self, post: Post) -> List[Comment]:
+        """Fetch comments for a post and store in repository"""
+        logger.debug(f"Fetching comments for post {post.id}")
+        comments = self.pokeapi_service.fetch_comments_for_post(post)
+        saved_comments = []
+        
+        for comment in comments:
+            if self.comment_repository.save(comment):
+                saved_comments.append(comment)
+                logger.debug(f"Saved comment: {comment.id}")
+        
+        logger.info(f"Saved {len(saved_comments)} comments for post {post.id}")
+        return saved_comments
+
+    def _process_comment(self, comment: Comment) -> Dict[str, Any]:
+        """Process comment data through the processing service"""
+        logger.debug(f"Processing comment {comment.id}")
+        result = self.processing_service.process_comment(comment.to_dict())
+        if result:
+            logger.debug(f"Successfully processed comment {comment.id}")
+            return {'comment_id': comment.id, 'status': 'processed'}
+        return {'comment_id': comment.id, 'status': 'failed'}

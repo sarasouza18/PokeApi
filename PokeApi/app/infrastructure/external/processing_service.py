@@ -1,43 +1,31 @@
-# app/infrastructure/persistence/dynamodb_comment_repository.py
+# app/infrastructure/external/processing_service.py
+import requests
 import os
-import boto3
-from botocore.exceptions import ClientError
-from typing import List
-from app.domain.entities.comment import Comment
-from app.domain.interfaces.repositories.icomment_repository import ICommentRepository
-from app.infrastructure.config.database import get_dynamodb_resource
+from typing import Dict, Optional
+from app.domain.interfaces.services.iprocessing_service import IProcessingService
+from app.infrastructure.external.dead_letter_queue import DeadLetterQueue
 
-class DynamoDBCommentRepository(ICommentRepository):
-    def __init__(self, table_name: str = None):
-        self.dynamodb = get_dynamodb_resource()
-        self.table_name = table_name or os.getenv('DYNAMODB_TABLE_COMMENTS', 'Comments')
-        self.table = self.dynamodb.Table(self.table_name)
+class ProcessingService(IProcessingService):
+    def __init__(self, dlq: DeadLetterQueue = None):
+        self.dlq = dlq or DeadLetterQueue()
+        self.processing_endpoint = os.getenv('PROCESSING_ENDPOINT', 'https://httpbin.org/post')
 
-    def save(self, comment: Comment) -> bool:
+    def process_post(self, post_data: Dict) -> Optional[Dict]:
         try:
-            self.table.put_item(Item=comment.to_dict())
-            return True
-        except ClientError as e:
-            print(f"Error saving comment: {e}")
-            return False
+            response = requests.post(self.processing_endpoint, json=post_data)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Error processing post {post_data.get('id')}: {e}")
+            self.dlq.add_failed_item('post', post_data)
+            return None
 
-    def get_by_post_id(self, post_id: int) -> List[Comment]:
+    def process_comment(self, comment_data: Dict) -> Optional[Dict]:
         try:
-            response = self.table.query(
-                IndexName='post_id-index',
-                KeyConditionExpression='post_id = :post_id',
-                ExpressionAttributeValues={':post_id': post_id}
-            )
-            return [
-                Comment(
-                    id=item['id'],
-                    post_id=item['post_id'],
-                    flavor=item['flavor'],
-                    potency=item['potency'],
-                    raw_data=item['raw_data'],
-                    created_at=item['created_at']
-                ) for item in response.get('Items', [])
-            ]
-        except ClientError as e:
-            print(f"Error getting comments: {e}")
-            return []
+            response = requests.post(self.processing_endpoint, json=comment_data)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Error processing comment {comment_data.get('id')}: {e}")
+            self.dlq.add_failed_item('comment', comment_data)
+            return None

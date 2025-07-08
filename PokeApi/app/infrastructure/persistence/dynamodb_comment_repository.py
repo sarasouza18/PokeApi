@@ -1,3 +1,4 @@
+# app/infrastructure/persistence/dynamodb_comment_repository.py
 import os
 import boto3
 from botocore.exceptions import ClientError

@@ -1,10 +1,11 @@
+# app/infrastructure/external/pokeapi_service.py
 import requests
 import time
 import random
 from typing import List, Dict, Optional
-from app.domain.interfaces.services import IPokeAPIService
 from app.domain.entities.post import Post
 from app.domain.entities.comment import Comment
+from app.domain.interfaces.services.ipokeapi_service import IPokeAPIService
 from app.infrastructure.external.circuit_breaker import CircuitBreaker
 
 class PokeAPIService(IPokeAPIService):
@@ -91,6 +92,5 @@ class PokeAPIService(IPokeAPIService):
                 if retries == max_retries:
                     raise
                     
-                # Add jitter to avoid thundering herd problem
                 sleep_time = min(delay * (2 ** retries) + random.uniform(0, 1), max_delay)
                 time.sleep(sleep_time)

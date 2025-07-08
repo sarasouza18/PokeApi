@@ -3,18 +3,12 @@ version: '3.8'
 services:
   app:
     build: .
+    command: /bin/bash -c "./scripts/bootstrap_dynamodb.sh && python -u app/main.py"
     container_name: poke-app
+    ports:
+      - "8010:8000"
     volumes:
       - .:/app
-    ports:
-      - "8001:8000"
-    depends_on:
-      redis:
-        condition: service_healthy
-      dynamodb:
-        condition: service_healthy
-      localstack:
-        condition: service_healthy
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -26,6 +20,13 @@ services:
       PROCESSING_ENDPOINT: http://httpbin.org/post
       CIRCUIT_BREAKER_THRESHOLD: 5
       CIRCUIT_BREAKER_RESET_TIMEOUT: 60
+    depends_on:
+      redis:
+        condition: service_healthy
+      dynamodb:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
 
   redis:
     image: redis:6.2.13-alpine3.18
@@ -38,29 +39,28 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 3
-    command: redis-server --save "" --appendonly no
+      retries: 5
 
   dynamodb:
-    image: amazon/dynamodb-local:1.18.0
+    image: amazon/dynamodb-local:latest
     container_name: poke-dynamodb
     ports:
       - "8000:8000"
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /home/dynamodblocal"
     volumes:
       - dynamodb_data:/home/dynamodblocal
-    command: -jar DynamoDBLocal.jar -sharedDb -dbPath /home/dynamodblocal
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000"]
-      interval: 5s
-      timeout: 3s
-      retries: 3
+      test: ["CMD-SHELL", "curl -s http://localhost:8000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   localstack:
     image: localstack/localstack:2.3.0
     container_name: poke-localstack
     ports:
       - "4566:4566"
-      - "4510-4559:4510-4559"
     environment:
       - SERVICES=sqs,dynamodb
       - AWS_DEFAULT_REGION=us-east-1
@@ -68,7 +68,6 @@ services:
       - AWS_SECRET_ACCESS_KEY=test
       - DEBUG=1
       - PERSISTENCE=1
-      - LOCALSTACK_HOST=localstack
     volumes:
       - localstack_data:/var/lib/localstack
       - /var/run/docker.sock:/var/run/docker.sock

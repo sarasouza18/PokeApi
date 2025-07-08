@@ -44,6 +44,18 @@ class CircuitBreaker:
     def _get_state_key(self, service_name: str) -> str:
         """Generate Redis key for service state"""
         return f"{self.namespace}:{service_name}"
+    
+    def _get_keys(self, service_name: str):
+        return {
+            'failures': f"{service_name}:failures",
+            'status': f"{service_name}:status",
+            'last_failure': f"{service_name}:last_failure"
+        }
+    
+    def record_success(self, service_name: str):
+        # Reset failure count and status after success
+        self._reset(service_name)
+        logger.info(f"Circuit breaker for {service_name} reset after success")
 
     def record_failure(self, service_name: str) -> None:
         """
@@ -63,6 +75,12 @@ class CircuitBreaker:
         except redis.RedisError as e:
             logger.error("Failed to record failure for %s: %s", service_name, str(e))
             raise
+        
+    def _reset(self, service_name: str):
+        keys = self._get_keys(service_name)
+        self.redis.delete(keys['failures'])
+        self.redis.set(keys['status'], "closed")
+        self.redis.delete(keys['last_failure'])
 
     def is_open(self, service_name: str) -> bool:
         """

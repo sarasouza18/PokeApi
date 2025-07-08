@@ -1,4 +1,3 @@
-# app/main.py
 import logging
 import os
 import time
@@ -22,9 +21,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 class ServiceInitializationError(Exception):
     """Custom exception for service initialization failures"""
     pass
+
 
 def load_configuration() -> None:
     """Load and validate environment configuration"""
@@ -35,21 +36,20 @@ def load_configuration() -> None:
             'DYNAMODB_ENDPOINT',
             'DLQ_QUEUE_URL'
         ]
-        
         missing_vars = [var for var in required_vars if not os.getenv(var)]
         if missing_vars:
             raise ValueError(f"Missing required environment variables: {missing_vars}")
-            
         logger.info("Configuration loaded successfully")
     except Exception as e:
         logger.error("Configuration loading failed: %s", str(e))
         raise
 
+
 def initialize_redis_connection() -> redis.Redis:
     """Initialize Redis connection with retry logic"""
     max_retries = 3
     retry_delay = 2
-    
+
     for attempt in range(max_retries):
         try:
             redis_conn = redis.Redis(
@@ -59,76 +59,61 @@ def initialize_redis_connection() -> redis.Redis:
                 socket_timeout=5,
                 socket_connect_timeout=5,
                 decode_responses=True,
-                retry_on_timeout=True,
                 health_check_interval=30
             )
-            
             if not redis_conn.ping():
                 raise redis.ConnectionError("Redis ping failed")
-                
             logger.info("Redis connection established")
             return redis_conn
-            
         except (redis.ConnectionError, redis.TimeoutError) as e:
             if attempt == max_retries - 1:
                 logger.error("Failed to connect to Redis after %s attempts", max_retries)
                 raise ServiceInitializationError("Redis connection failed") from e
-                
-            logger.warning("Redis connection attempt %s failed, retrying in %s seconds...", 
-                         attempt + 1, retry_delay)
+            logger.warning("Redis connection attempt %s failed, retrying in %s seconds...",
+                           attempt + 1, retry_delay)
             time.sleep(retry_delay)
+
 
 def initialize_services() -> tuple[SocialMediaController, ErrorHandler]:
     """Initialize all application services"""
     try:
         logger.info("Starting service initialization...")
-        
-        # 1. Initialize Redis connection
+
+        # Redis & Circuit Breaker
         redis_conn = initialize_redis_connection()
-        
-        # 2. Initialize Circuit Breaker
         circuit_breaker = CircuitBreaker(
             redis_client=redis_conn,
             failure_threshold=int(os.getenv("CIRCUIT_BREAKER_THRESHOLD", "5")),
             reset_timeout=int(os.getenv("CIRCUIT_BREAKER_RESET_TIMEOUT", "60"))
         )
-        
-        # 3. Initialize AWS services
-        aws_config = {
-            'region_name': os.getenv('AWS_REGION', 'us-east-1'),
-            'aws_access_key_id': os.getenv('AWS_ACCESS_KEY_ID', 'test'),
-            'aws_secret_access_key': os.getenv('AWS_SECRET_ACCESS_KEY', 'test'),
-            'endpoint_url': os.getenv('DYNAMODB_ENDPOINT', 'http://dynamodb:8000')
-        }
 
-        # 4. Initialize Dead Letter Queue
+        # DynamoDB endpoint config (for LocalStack or custom)
+        endpoint_url = os.getenv('DYNAMODB_ENDPOINT', 'http://dynamodb:8000')
+
+        # DLQ
         dlq = DeadLetterQueue(
             queue_url=os.getenv("DLQ_QUEUE_URL"),
-            **aws_config
+            region_name=os.getenv('AWS_REGION', 'us-east-1')
         )
 
-        # 5. Initialize Repositories
+        # Repositories
         post_repository = DynamoDBPostRepository(
             table_name=os.getenv("DYNAMODB_TABLE_POSTS", "Posts"),
-            **aws_config
+            endpoint_url=endpoint_url
         )
-        
         comment_repository = DynamoDBCommentRepository(
             table_name=os.getenv("DYNAMODB_TABLE_COMMENTS", "Comments"),
-            **aws_config
+            endpoint_url=endpoint_url
         )
 
-        # 6. Initialize Services
-        pokeapi_service = PokeAPIService(
-            circuit_breaker=circuit_breaker
-        )
-
+        # Services
+        pokeapi_service = PokeAPIService(circuit_breaker=circuit_breaker)
         processing_service = ProcessingService(
             dlq=dlq,
             endpoint=os.getenv("PROCESSING_ENDPOINT", "http://httpbin.org/post")
         )
 
-        # 7. Initialize Controller
+        # Controller
         controller = SocialMediaController(
             post_repository=post_repository,
             comment_repository=comment_repository,
@@ -142,6 +127,7 @@ def initialize_services() -> tuple[SocialMediaController, ErrorHandler]:
     except Exception as e:
         logger.critical("Service initialization failed: %s", str(e), exc_info=True)
         raise ServiceInitializationError("Service initialization failed") from e
+
 
 def execute_pipeline(controller: SocialMediaController) -> Dict[str, Any]:
     """Execute the main application pipeline"""
@@ -163,33 +149,30 @@ def execute_pipeline(controller: SocialMediaController) -> Dict[str, Any]:
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
         }
 
+
 def main() -> int:
     """Application entry point"""
     try:
-        # 1. Load configuration
         load_configuration()
-        
-        # 2. Initialize services
         controller, error_handler = initialize_services()
-        
-        # 3. Execute pipeline with error handling
+
         @error_handler.wrap_endpoint
         def _execute_pipeline():
             return execute_pipeline(controller)
-            
+
         result = _execute_pipeline()
-        
-        # 4. Handle results
+
         if result['status'] == 'success':
             logger.info("Application completed successfully")
             return 0
         else:
             logger.error("Application completed with errors")
             return 1
-            
+
     except Exception as e:
         logger.critical("Application failed catastrophically: %s", str(e), exc_info=True)
         return 1
+
 
 if __name__ == "__main__":
     exit_code = main()

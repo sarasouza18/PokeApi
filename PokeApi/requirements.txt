@@ -2,3 +2,4 @@ boto3>=1.28.0
 redis
 requests
 python-dotenv
+tenacity==8.2.3

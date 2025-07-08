@@ -18,7 +18,7 @@ class PokeAPIService(IPokeAPIService):
         )
 
     def get_all_posts(self) -> List[Dict]:
-        if self.circuit_breaker.is_open():
+        if self.circuit_breaker.is_open("pokeapi"):
             raise Exception("Circuit breaker is open - PokeAPI is unavailable")
 
         try:
@@ -30,13 +30,13 @@ class PokeAPIService(IPokeAPIService):
             raise Exception(f"Failed to fetch posts from PokeAPI: {e}")
 
     def get_post_details(self, post_id: int) -> Optional[Dict]:
-        if self.circuit_breaker.is_open():
+        if self.circuit_breaker.is_open("pokeapi"):
             raise Exception("Circuit breaker is open - PokeAPI is unavailable")
 
         try:
             response = requests.get(f"{self.BASE_URL}/{post_id}/")
             response.raise_for_status()
-            self.circuit_breaker.record_success()
+            self.circuit_breaker.record_success("pokeapi")
             return response.json()
         except requests.exceptions.RequestException as e:
             self.circuit_breaker.record_failure()

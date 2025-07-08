@@ -6,6 +6,7 @@ from app.domain.entities.comment import Comment
 from app.domain.interfaces.repositories import IPostRepository, ICommentRepository
 from app.domain.interfaces.services import IPokeAPIService, IProcessingService
 from app.presentation.error_handling.error_handler import ErrorHandler
+from app.infrastructure.search.opensearch_service import OpenSearchService  # ➕ Import OpenSearch
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class SocialMediaController:
         self.comment_repository = comment_repository
         self.pokeapi_service = pokeapi_service
         self.processing_service = processing_service
+        self.opensearch_service = OpenSearchService()  # ➕ Instância de OpenSearch
 
     def execute_pipeline(self) -> Dict[str, Any]:
         """
@@ -97,9 +99,18 @@ class SocialMediaController:
         """Process post data through the processing service"""
         logger.debug(f"Processing post {post.id}")
         result = self.processing_service.process_post(post.to_dict())
+
         if result:
             logger.debug(f"Successfully processed post {post.id}")
+
+            try:
+                self.opensearch_service.index_post(post.id, post.to_dict())
+                logger.info(f"✅ Post {post.id} indexed in OpenSearch")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to index post {post.id}: {str(e)}")
+
             return {'post_id': post.id, 'status': 'processed'}
+
         return {'post_id': post.id, 'status': 'failed'}
 
     def _fetch_and_store_comments(self, post: Post) -> List[Comment]:

@@ -20,12 +20,49 @@ services:
       PROCESSING_ENDPOINT: http://httpbin.org/post
       CIRCUIT_BREAKER_THRESHOLD: 5
       CIRCUIT_BREAKER_RESET_TIMEOUT: 60
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: 9200
+      OPENSEARCH_USER: admin
+      OPENSEARCH_PASS: admin
     depends_on:
       redis:
         condition: service_healthy
       dynamodb:
         condition: service_healthy
       localstack:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
+  dlq-worker:
+    build: .
+    container_name: poke-dlq-worker
+    command: python app/infrastructure/workers/dlq_reprocessor.py
+    volumes:
+      - .:/app
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      DLQ_QUEUE_URL: http://localstack:4566/000000000000/dead-letter-queue
+      PROCESSING_ENDPOINT: http://httpbin.org/post
+      CIRCUIT_BREAKER_THRESHOLD: 5
+      CIRCUIT_BREAKER_RESET_TIMEOUT: 60
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: 9200
+      OPENSEARCH_USER: admin
+      OPENSEARCH_PASS: admin
+    depends_on:
+      redis:
+        condition: service_healthy
+      dynamodb:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      opensearch:
         condition: service_healthy
 
   redis:
@@ -73,6 +110,26 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  opensearch:
+    image: opensearchproject/opensearch:2.11.1
+    container_name: poke-opensearch
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
       interval: 10s
       timeout: 5s
       retries: 5

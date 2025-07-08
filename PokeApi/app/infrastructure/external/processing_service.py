@@ -8,6 +8,7 @@ from app.infrastructure.external.dead_letter_queue import DeadLetterQueue
 
 logger = logging.getLogger(__name__)
 
+
 class ProcessingService(IProcessingService):
     def __init__(self, dlq: DeadLetterQueue = None, endpoint: Optional[str] = None):
         """
@@ -20,7 +21,8 @@ class ProcessingService(IProcessingService):
         self.dlq = dlq or DeadLetterQueue()
         self.processing_endpoint = endpoint or os.getenv('PROCESSING_ENDPOINT', 'https://httpbin.org/post')
         self.timeout = int(os.getenv('PROCESSING_TIMEOUT', '5'))  # seconds
-        logger.info(f"Initialized ProcessingService with endpoint: {self.processing_endpoint}")
+
+        logger.info(f"🚀 ProcessingService initialized with endpoint: {self.processing_endpoint}")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -39,7 +41,7 @@ class ProcessingService(IProcessingService):
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            logger.warning(f"Request failed for item {data.get('id')}: {str(e)}")
+            logger.warning(f"⚠️ Request failed for item {data.get('id')}: {str(e)}")
             raise
 
     def process_post(self, post_data: Dict) -> Optional[Dict]:
@@ -52,13 +54,14 @@ class ProcessingService(IProcessingService):
         Returns:
             Processed result or None if failed
         """
+        item_id = post_data.get("id", "unknown")
         try:
             result = self._make_request(post_data)
-            logger.debug(f"Successfully processed post {post_data.get('id')}")
+            logger.info(f"✅ Post {item_id} processed successfully")
             return result
         except Exception as e:
-            logger.error(f"Failed to process post {post_data.get('id')}: {str(e)}")
-            self.dlq.add_failed_item('post', post_data)
+            logger.error(f"❌ Failed to process post {item_id}: {str(e)}")
+            self._send_to_dlq("post", post_data)
             return None
 
     def process_comment(self, comment_data: Dict) -> Optional[Dict]:
@@ -71,11 +74,26 @@ class ProcessingService(IProcessingService):
         Returns:
             Processed result or None if failed
         """
+        item_id = comment_data.get("id", "unknown")
         try:
             result = self._make_request(comment_data)
-            logger.debug(f"Successfully processed comment {comment_data.get('id')}")
+            logger.info(f"✅ Comment {item_id} processed successfully")
             return result
         except Exception as e:
-            logger.error(f"Failed to process comment {comment_data.get('id')}: {str(e)}")
-            self.dlq.add_failed_item('comment', comment_data)
+            logger.error(f"❌ Failed to process comment {item_id}: {str(e)}")
+            self._send_to_dlq("comment", comment_data)
             return None
+
+    def _send_to_dlq(self, item_type: str, payload: Dict) -> None:
+        """
+        Wraps and sends failed item to the dead letter queue.
+        
+        Args:
+            item_type: 'post' or 'comment'
+            payload: failed item data
+        """
+        try:
+            self.dlq.add_failed_item(item_type, payload)
+            logger.info(f"📦 Sent {item_type} {payload.get('id', 'unknown')} to DLQ")
+        except Exception as e:
+            logger.error(f"🔥 Failed to enqueue {item_type} to DLQ: {str(e)}")

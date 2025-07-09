@@ -1,5 +1,5 @@
 
-# PokeSocialAPI – Backend Engineering Challenge
+# PokeSocialAPI
 
 A simulated social media platform powered by the [PokéAPI](https://pokeapi.co/), featuring asynchronous ingestion, resilient processing, and a cloud-ready architecture.
 
